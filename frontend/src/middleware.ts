@@ -14,7 +14,7 @@ export async function middleware(req: NextRequest) {
 
   if (isLogin && isAccessTokenExpired) await refreshTokens(cookieStore);
 
-  if (isProtectedRoute(req.nextUrl.pathname) && !isLogin) {
+  if (needAuthorizedRoute(req.nextUrl.pathname) && !isLogin) {
     return createUnauthorizedResponse();
   }
 
@@ -97,9 +97,10 @@ function parseCookie(cookieStr: string) {
   return { name, value, options };
 }
 
-function isProtectedRoute(pathname: string): boolean {
+function needAuthorizedRoute(pathname: string): boolean {
   return (
     pathname.startsWith("/post/write") ||
+    pathname.startsWith("/member/me") ||
     pathname.match(/^\/post\/\d+\/edit$/) !== null
   );
 }
