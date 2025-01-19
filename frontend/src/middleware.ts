@@ -47,6 +47,21 @@ export async function middleware(req: NextRequest) {
     }
   }
 
+  const isLogin = meResponse.data !== undefined;
+
+  if (
+    (req.nextUrl.pathname.startsWith("/post/write") ||
+      req.nextUrl.pathname.match(/^\/post\/\d+\/edit$/)) &&
+    !isLogin
+  ) {
+    return new NextResponse("로그인이 필요합니다.", {
+      status: 401,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    });
+  }
+
   return NextResponse.next({
     headers: {
       cookie: (await cookies()).toString(),
