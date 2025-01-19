@@ -5,6 +5,25 @@ import client from "./lib/backend/client";
 import { ResponseCookie } from "next/dist/compiled/@edge-runtime/cookies";
 
 export async function middleware(req: NextRequest) {
+  const accessToken = (await cookies()).get("accessToken")?.value;
+
+  let isExpired = true;
+
+  if (accessToken) {
+    try {
+      const tokenParts = accessToken.split(".");
+      const payload = JSON.parse(
+        Buffer.from(tokenParts[1], "base64").toString()
+      );
+      const expTimestamp = payload.exp * 1000; // exp는 초 단위이므로 밀리초로 변환
+      isExpired = Date.now() > expTimestamp;
+    } catch (e) {
+      console.error("토큰 파싱 중 오류 발생:", e);
+    }
+  }
+
+  console.log(`isExpired: ${isExpired}`);
+
   const meResponse = await client.GET("/api/v1/members/me", {
     headers: {
       cookie: (await cookies()).toString(),
