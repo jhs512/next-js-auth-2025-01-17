@@ -3,10 +3,29 @@ import type { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import client from "./lib/backend/client";
 import { ResponseCookie } from "next/dist/compiled/@edge-runtime/cookies";
+import { ReadonlyRequestCookies } from "next/dist/server/web/spec-extension/adapters/request-cookies";
 
 export async function middleware(req: NextRequest) {
-  const accessToken = (await cookies()).get("accessToken")?.value;
+  const cookieStore = await cookies();
+  const accessToken = cookieStore.get("accessToken")?.value;
 
+  const { isLogin, isAccessTokenExpired, accessTokenPayload } =
+    parseAccessToken(accessToken);
+
+  if (isLogin && isAccessTokenExpired) await refreshTokens(cookieStore);
+
+  if (isProtectedRoute(req.nextUrl.pathname) && !isLogin) {
+    return createUnauthorizedResponse();
+  }
+
+  return NextResponse.next({
+    headers: {
+      cookie: cookieStore.toString(),
+    },
+  });
+}
+
+function parseAccessToken(accessToken: string | undefined) {
   let isAccessTokenExpired = true;
   let accessTokenPayload = null;
 
@@ -16,7 +35,7 @@ export async function middleware(req: NextRequest) {
       accessTokenPayload = JSON.parse(
         Buffer.from(tokenParts[1], "base64").toString()
       );
-      const expTimestamp = accessTokenPayload.exp * 1000; // exp는 초 단위이므로 밀리초로 변환
+      const expTimestamp = accessTokenPayload.exp * 1000;
       isAccessTokenExpired = Date.now() > expTimestamp;
     } catch (e) {
       console.error("토큰 파싱 중 오류 발생:", e);
@@ -26,69 +45,70 @@ export async function middleware(req: NextRequest) {
   const isLogin =
     typeof accessTokenPayload === "object" && accessTokenPayload !== null;
 
-  if (isLogin && isAccessTokenExpired) {
-    const meResponse = await client.GET("/api/v1/members/me", {
-      headers: {
-        cookie: (await cookies()).toString(),
-      },
-    });
+  return { isLogin, isAccessTokenExpired, accessTokenPayload };
+}
 
-    if (meResponse.response.headers.get("Set-Cookie")) {
-      const meResponseCookies = meResponse.response.headers
-        .get("Set-Cookie")
-        ?.split(",");
+async function refreshTokens(cookieStore: ReadonlyRequestCookies) {
+  const meResponse = await client.GET("/api/v1/members/me", {
+    headers: {
+      cookie: cookieStore.toString(),
+    },
+  });
 
-      if (meResponseCookies) {
-        for (const cookieStr of meResponseCookies) {
-          // 쿠키 문자열을 각 속성으로 파싱
-          const parts = cookieStr.split(";").map((p) => p.trim());
-          const [name, value] = parts[0].split("=");
+  const setCookieHeader = meResponse.response.headers.get("Set-Cookie");
 
-          // accessToken 또는 apiKey 쿠키만 처리
-          if (name !== "accessToken" && name !== "apiKey") continue;
+  if (setCookieHeader) {
+    const cookies = setCookieHeader.split(",");
 
-          const options: Partial<ResponseCookie> = {};
-          for (const part of parts.slice(1)) {
-            if (part.toLowerCase() === "httponly") options.httpOnly = true;
-            else if (part.toLowerCase() === "secure") options.secure = true;
-            else {
-              const [key, val] = part.split("=");
-              const keyLower = key.toLowerCase();
-              if (keyLower === "domain") options.domain = val;
-              else if (keyLower === "path") options.path = val;
-              else if (keyLower === "max-age") options.maxAge = parseInt(val);
-              else if (keyLower === "expires")
-                options.expires = new Date(val).getTime();
-              else if (keyLower === "samesite")
-                options.sameSite = val.toLowerCase() as
-                  | "lax"
-                  | "strict"
-                  | "none";
-            }
-          }
+    for (const cookieStr of cookies) {
+      const cookieData = parseCookie(cookieStr);
 
-          (await cookies()).set(name, value, options);
-        }
+      if (cookieData) {
+        const { name, value, options } = cookieData;
+        if (name !== "accessToken" && name !== "apiKey") return null;
+
+        cookieStore.set(name, value, options);
       }
     }
   }
+}
 
-  if (
-    (req.nextUrl.pathname.startsWith("/post/write") ||
-      req.nextUrl.pathname.match(/^\/post\/\d+\/edit$/)) &&
-    !isLogin
-  ) {
-    return new NextResponse("로그인이 필요합니다.", {
-      status: 401,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-      },
-    });
+function parseCookie(cookieStr: string) {
+  const parts = cookieStr.split(";").map((p) => p.trim());
+  const [name, value] = parts[0].split("=");
+
+  const options: Partial<ResponseCookie> = {};
+  for (const part of parts.slice(1)) {
+    if (part.toLowerCase() === "httponly") options.httpOnly = true;
+    else if (part.toLowerCase() === "secure") options.secure = true;
+    else {
+      const [key, val] = part.split("=");
+      const keyLower = key.toLowerCase();
+      if (keyLower === "domain") options.domain = val;
+      else if (keyLower === "path") options.path = val;
+      else if (keyLower === "max-age") options.maxAge = parseInt(val);
+      else if (keyLower === "expires")
+        options.expires = new Date(val).getTime();
+      else if (keyLower === "samesite")
+        options.sameSite = val.toLowerCase() as "lax" | "strict" | "none";
+    }
   }
 
-  return NextResponse.next({
+  return { name, value, options };
+}
+
+function isProtectedRoute(pathname: string): boolean {
+  return (
+    pathname.startsWith("/post/write") ||
+    pathname.match(/^\/post\/\d+\/edit$/) !== null
+  );
+}
+
+function createUnauthorizedResponse(): NextResponse {
+  return new NextResponse("로그인이 필요합니다.", {
+    status: 401,
     headers: {
-      cookie: (await cookies()).toString(),
+      "Content-Type": "text/html; charset=utf-8",
     },
   });
 }
