@@ -7,66 +7,71 @@ import { ResponseCookie } from "next/dist/compiled/@edge-runtime/cookies";
 export async function middleware(req: NextRequest) {
   const accessToken = (await cookies()).get("accessToken")?.value;
 
-  let isExpired = true;
+  let isAccessTokenExpired = true;
+  let accessTokenPayload = null;
 
   if (accessToken) {
     try {
       const tokenParts = accessToken.split(".");
-      const payload = JSON.parse(
+      accessTokenPayload = JSON.parse(
         Buffer.from(tokenParts[1], "base64").toString()
       );
-      const expTimestamp = payload.exp * 1000; // exp는 초 단위이므로 밀리초로 변환
-      isExpired = Date.now() > expTimestamp;
+      const expTimestamp = accessTokenPayload.exp * 1000; // exp는 초 단위이므로 밀리초로 변환
+      isAccessTokenExpired = Date.now() > expTimestamp;
     } catch (e) {
       console.error("토큰 파싱 중 오류 발생:", e);
     }
   }
 
-  console.log(`isExpired: ${isExpired}`);
+  const isLogin =
+    typeof accessTokenPayload === "object" && accessTokenPayload !== null;
 
-  const meResponse = await client.GET("/api/v1/members/me", {
-    headers: {
-      cookie: (await cookies()).toString(),
-    },
-  });
+  if (isLogin && isAccessTokenExpired) {
+    const meResponse = await client.GET("/api/v1/members/me", {
+      headers: {
+        cookie: (await cookies()).toString(),
+      },
+    });
 
-  if (meResponse.response.headers.get("Set-Cookie")) {
-    const meResponseCookies = meResponse.response.headers
-      .get("Set-Cookie")
-      ?.split(",");
+    if (meResponse.response.headers.get("Set-Cookie")) {
+      const meResponseCookies = meResponse.response.headers
+        .get("Set-Cookie")
+        ?.split(",");
 
-    if (meResponseCookies) {
-      for (const cookieStr of meResponseCookies) {
-        // 쿠키 문자열을 각 속성으로 파싱
-        const parts = cookieStr.split(";").map((p) => p.trim());
-        const [name, value] = parts[0].split("=");
+      if (meResponseCookies) {
+        for (const cookieStr of meResponseCookies) {
+          // 쿠키 문자열을 각 속성으로 파싱
+          const parts = cookieStr.split(";").map((p) => p.trim());
+          const [name, value] = parts[0].split("=");
 
-        // accessToken 또는 apiKey 쿠키만 처리
-        if (name !== "accessToken" && name !== "apiKey") continue;
+          // accessToken 또는 apiKey 쿠키만 처리
+          if (name !== "accessToken" && name !== "apiKey") continue;
 
-        const options: Partial<ResponseCookie> = {};
-        for (const part of parts.slice(1)) {
-          if (part.toLowerCase() === "httponly") options.httpOnly = true;
-          else if (part.toLowerCase() === "secure") options.secure = true;
-          else {
-            const [key, val] = part.split("=");
-            const keyLower = key.toLowerCase();
-            if (keyLower === "domain") options.domain = val;
-            else if (keyLower === "path") options.path = val;
-            else if (keyLower === "max-age") options.maxAge = parseInt(val);
-            else if (keyLower === "expires")
-              options.expires = new Date(val).getTime();
-            else if (keyLower === "samesite")
-              options.sameSite = val.toLowerCase() as "lax" | "strict" | "none";
+          const options: Partial<ResponseCookie> = {};
+          for (const part of parts.slice(1)) {
+            if (part.toLowerCase() === "httponly") options.httpOnly = true;
+            else if (part.toLowerCase() === "secure") options.secure = true;
+            else {
+              const [key, val] = part.split("=");
+              const keyLower = key.toLowerCase();
+              if (keyLower === "domain") options.domain = val;
+              else if (keyLower === "path") options.path = val;
+              else if (keyLower === "max-age") options.maxAge = parseInt(val);
+              else if (keyLower === "expires")
+                options.expires = new Date(val).getTime();
+              else if (keyLower === "samesite")
+                options.sameSite = val.toLowerCase() as
+                  | "lax"
+                  | "strict"
+                  | "none";
+            }
           }
-        }
 
-        (await cookies()).set(name, value, options);
+          (await cookies()).set(name, value, options);
+        }
       }
     }
   }
-
-  const isLogin = meResponse.data !== undefined;
 
   if (
     (req.nextUrl.pathname.startsWith("/post/write") ||
